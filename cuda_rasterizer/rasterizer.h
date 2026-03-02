@@ -50,7 +50,10 @@ namespace CudaRasterizer
 			const bool prefiltered,
 			float* out_color,
 			int* radii = nullptr,
-			bool debug = false);
+			bool debug = false,
+			const float* language_feature_precomp = nullptr,
+			float* out_language_feature = nullptr,
+			bool include_feature = false);
 
 		static void backward(
 			const int P, int D, int M, int R,
@@ -81,7 +84,11 @@ namespace CudaRasterizer
 			float* dL_dsh,
 			float* dL_dscale,
 			float* dL_drot,
-			bool debug);
+			bool debug,
+			const float* language_feature_precomp = nullptr,
+			const float* dL_dpix_feature = nullptr,
+			float* dL_dlanguage_feature = nullptr,
+			bool include_feature = false);
 	};
 };
 

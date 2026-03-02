@@ -271,7 +271,10 @@ renderCUDA(
 	float* __restrict__ final_T,
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
-	float* __restrict__ out_color)
+	float* __restrict__ out_color,
+	const float* __restrict__ language_feature,
+	float* __restrict__ out_language_feature,
+	bool include_feature)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -302,6 +305,12 @@ renderCUDA(
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
 	float C[CHANNELS] = { 0 };
+
+	// Initialize language feature accumulator
+	float F_acc[NUM_CHANNELS_language_feature];
+	if (include_feature)
+		for (int i = 0; i < NUM_CHANNELS_language_feature; i++)
+			F_acc[i] = 0;
 
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
@@ -355,6 +364,14 @@ renderCUDA(
 			for (int ch = 0; ch < CHANNELS; ch++)
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
 
+			// Accumulate language features (from global memory)
+			if (include_feature)
+			{
+				const int global_id = collected_id[j];
+				for (int ch = 0; ch < NUM_CHANNELS_language_feature; ch++)
+					F_acc[ch] += language_feature[global_id * NUM_CHANNELS_language_feature + ch] * alpha * T;
+			}
+
 			T = test_T;
 
 			// Keep track of last range entry to update this
@@ -371,6 +388,13 @@ renderCUDA(
 		n_contrib[pix_id] = last_contributor;
 		for (int ch = 0; ch < CHANNELS; ch++)
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
+
+		// Write out language features (no background for features)
+		if (include_feature)
+		{
+			for (int ch = 0; ch < NUM_CHANNELS_language_feature; ch++)
+				out_language_feature[ch * H * W + pix_id] = F_acc[ch];
+		}
 	}
 }
 
@@ -385,7 +409,10 @@ void FORWARD::render(
 	float* final_T,
 	uint32_t* n_contrib,
 	const float* bg_color,
-	float* out_color)
+	float* out_color,
+	const float* language_feature,
+	float* out_language_feature,
+	bool include_feature)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -397,7 +424,10 @@ void FORWARD::render(
 		final_T,
 		n_contrib,
 		bg_color,
-		out_color);
+		out_color,
+		language_feature,
+		out_language_feature,
+		include_feature);
 }
 
 void FORWARD::preprocess(int P, int D, int M,

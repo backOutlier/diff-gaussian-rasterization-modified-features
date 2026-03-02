@@ -412,7 +412,11 @@ renderCUDA(
 	float3* __restrict__ dL_dmean2D,
 	float4* __restrict__ dL_dconic2D,
 	float* __restrict__ dL_dopacity,
-	float* __restrict__ dL_dcolors)
+	float* __restrict__ dL_dcolors,
+	const float* __restrict__ language_feature,
+	const float* __restrict__ dL_dpixels_feature,
+	float* __restrict__ dL_dlanguage_feature,
+	bool include_feature)
 {
 	// We rasterize again. Compute necessary block info.
 	auto block = cg::this_thread_block();
@@ -451,6 +455,20 @@ renderCUDA(
 	if (inside)
 		for (int i = 0; i < C; i++)
 			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
+
+	// Language feature backward state
+	float accum_rec_f[NUM_CHANNELS_language_feature];
+	float dL_dpixel_f[NUM_CHANNELS_language_feature];
+	float last_feature_val[NUM_CHANNELS_language_feature];
+	if (include_feature)
+	{
+		for (int i = 0; i < NUM_CHANNELS_language_feature; i++)
+		{
+			accum_rec_f[i] = 0;
+			last_feature_val[i] = 0;
+			dL_dpixel_f[i] = inside ? dL_dpixels_feature[i * H * W + pix_id] : 0;
+		}
+	}
 
 	float last_alpha = 0;
 	float last_color[C] = { 0 };
@@ -522,6 +540,22 @@ renderCUDA(
 				// many that were affected by this Gaussian.
 				atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
 			}
+
+			// Language feature gradient contribution
+			if (include_feature)
+			{
+				for (int ch = 0; ch < NUM_CHANNELS_language_feature; ch++)
+				{
+					const float f = language_feature[global_id * NUM_CHANNELS_language_feature + ch];
+					accum_rec_f[ch] = last_alpha * last_feature_val[ch] + (1.f - last_alpha) * accum_rec_f[ch];
+					last_feature_val[ch] = f;
+
+					const float dL_dchannel_f = dL_dpixel_f[ch];
+					dL_dalpha += (f - accum_rec_f[ch]) * dL_dchannel_f;
+					atomicAdd(&(dL_dlanguage_feature[global_id * NUM_CHANNELS_language_feature + ch]), dchannel_dcolor * dL_dchannel_f);
+				}
+			}
+
 			dL_dalpha *= T;
 			// Update last alpha (to be used in the next iteration)
 			last_alpha = alpha;
@@ -532,6 +566,7 @@ renderCUDA(
 			for (int i = 0; i < C; i++)
 				bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
 			dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
+			// Note: no background for language features, so no additional bg term
 
 
 			// Helpful reusable temporary variables
@@ -636,7 +671,11 @@ void BACKWARD::render(
 	float3* dL_dmean2D,
 	float4* dL_dconic2D,
 	float* dL_dopacity,
-	float* dL_dcolors)
+	float* dL_dcolors,
+	const float* language_feature,
+	const float* dL_dpixels_feature,
+	float* dL_dlanguage_feature,
+	bool include_feature)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
 		ranges,
@@ -652,6 +691,10 @@ void BACKWARD::render(
 		dL_dmean2D,
 		dL_dconic2D,
 		dL_dopacity,
-		dL_dcolors
+		dL_dcolors,
+		language_feature,
+		dL_dpixels_feature,
+		dL_dlanguage_feature,
+		include_feature
 		);
 }
